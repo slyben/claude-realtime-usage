@@ -3,3 +3,4 @@ __pycache__/
 .playwright-mcp/
 .venv/
 .claude/settings.local.json
+backlog.md

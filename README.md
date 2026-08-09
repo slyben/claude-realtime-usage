@@ -1,5 +1,7 @@
 # claude-realtime-usage
 
+*A live rerun of the conversation you're already having - subtitled in dollars and tokens.*
+
 Tails one active Claude Code CLI session's `.jsonl` transcript and serves a live chat-transcript
 view (per-turn cost/tokens, cold-cache flags, a draggable mini usage chart) in a browser tab,
 updated roughly one turn behind the CLI.
