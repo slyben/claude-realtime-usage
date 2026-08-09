@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<!-- Copyright (c) 2026 Bertrand Carre. Licensed under the MIT License - see LICENSE in the project root. -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Live: __SESSION_ID__</title>
+<style>
+  :root {
+    --bg: #0b0d10; --panel: #12151a; --border: #22262d; --text: #e6e8eb;
+    --muted: #8b929c; --accent: #2dd4a7;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f5f6f8; --panel: #ffffff; --border: #dfe2e6; --text: #1b1f24; --muted: #5b6470; --accent: #17b489; }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: 24px;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .warn { background: #3a2a0a; color: #f0b90b; border: 1px solid #6b4f0a; border-radius: 6px; padding: 8px 12px; font-size: 12px; margin-bottom: 16px; flex: 0 0 auto; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; flex: 0 0 auto; }
+  .tile {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 16px; min-width: 160px;
+    display: flex; align-items: baseline; gap: 10px;
+  }
+  .tile .label { color: var(--muted); font-size: 12px; }
+  .tile .value { font-size: 20px; font-weight: 600; }
+  select, .toggle { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 13px; }
+  label.toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; padding: 4px 10px; }
+  .controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+  #sessionDetail { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+  .detail-bar {
+    flex: 0 0 auto; background: var(--bg);
+    display: flex; align-items: center; gap: 12px; padding: 4px 0 12px;
+  }
+  .detail-meta { font-size: 12px; color: var(--muted); }
+  .load-more-btn {
+    display: block; width: 100%; margin: 10px 0 4px; padding: 8px 14px; font-size: 12px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text); cursor: pointer;
+  }
+  .load-more-btn:hover { background: rgba(128,128,128,0.1); }
+  .load-more-btn:disabled { opacity: 0.5; cursor: default; }
+  .transcript { flex: 1 1 auto; min-height: 200px; overflow-y: auto; padding-right: 4px; }
+  .turn { margin-bottom: 14px; max-width: 900px; }
+  /* time | in | out | cached | $ | chevron | role-dot+preview — an "invisible table":
+     grid columns for alignment, no visible cell borders/backgrounds. */
+  .turn-grid-cols { grid-template-columns: 44px 5ch 5ch 6ch 6ch 12px 1fr; }
+  .turn-head {
+    display: grid; align-items: baseline; gap: 2px 6px; font-size: 11px; color: var(--muted);
+    margin-bottom: 4px; cursor: pointer; user-select: none;
+  }
+  .turn-head:hover { color: var(--text); }
+  .turn-time { font-variant-numeric: tabular-nums; }
+  .turn-num { text-align: right; font-variant-numeric: tabular-nums; }
+  .turn-num.cold-cache { color: #f0648b; text-decoration: underline dotted; text-decoration-color: rgba(240,100,139,0.6); cursor: help; }
+  .turn-chevron { text-align: center; }
+  .role-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .role-dot-user { background: var(--accent); }
+  .role-dot-assistant { background: #5b8def; }
+  .turn-roletext { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
+  .turn-preview {
+    color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+  }
+  .turn-head-labels {
+    display: grid; align-items: center; gap: 4px 6px; font-size: 10px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .03em; padding-bottom: 4px; margin-bottom: 6px;
+    border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); z-index: 2;
+  }
+  .turn-body { display: none; }
+  .turn.expanded .turn-body { display: block; }
+  .turn.expanded .turn-preview { display: none; }
+  .turn-head.visible-max-metric { border-radius: 6px; margin: -2px -6px; padding: 2px 6px; }
+  .fold-controls { display: flex; gap: 10px; }
+  .fold-controls button {
+    background: none; border: none; color: var(--accent); font-size: 12px; cursor: pointer;
+    text-decoration: underline; padding: 0;
+  }
+  .bubble {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 14px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+  }
+  .turn-user .bubble { background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+  .thinking-block, .tool-step { margin-top: 6px; }
+  .thinking-block summary, .tool-step summary {
+    cursor: pointer; font-size: 12px; color: var(--muted); padding: 6px 10px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px; list-style: none;
+  }
+  .thinking-block summary::-webkit-details-marker, .tool-step summary::-webkit-details-marker { display: none; }
+  .tool-step[open] summary, .thinking-block[open] summary { border-radius: 8px 8px 0 0; }
+  .tool-step .tool-body, .thinking-block .thinking-body {
+    border: 1px solid var(--border); border-top: none; border-radius: 0 0 8px 8px;
+    padding: 10px 14px; font-size: 11.5px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre-wrap; word-break: break-word; max-height: 400px; overflow-y: auto;
+  }
+  .tool-body .tool-input { color: var(--muted); margin-bottom: 8px; }
+  .tool-body .tool-result-error { color: #f0648b; }
+  .tool-pending { color: var(--muted); font-style: italic; }
+  .attach-note { color: var(--muted); font-style: italic; font-size: 12px; }
+  .turn-chart-panel { flex: 0 0 auto; margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
+  .turn-chart-panel svg { display: block; width: 100%; cursor: pointer; user-select: none; }
+  .turn-chart-legend { display: inline-flex; gap: 10px; margin-left: 8px; font-size: 11px; color: var(--muted); }
+  .partial-badge {
+    margin-left: 8px; font-size: 11px; color: #f0b90b; background: rgba(240,185,11,0.12);
+    border: 1px solid rgba(240,185,11,0.35); border-radius: 10px; padding: 1px 8px;
+  }
+  .turn-chart-overlay { fill: rgba(255,255,255,0.18); stroke: var(--text); stroke-width: 1; cursor: grab; }
+  .turn-chart-overlay:active { cursor: grabbing; }
+</style>
+</head>
+<body>
+<div class="detail-bar">
+  <span class="detail-meta">__SESSION_ID__ &mdash; __SESSION_PATH__</span>
+  <div class="fold-controls">
+    <button id="expandAllBtn">Expand all</button>
+    <button id="collapseAllBtn">Collapse all</button>
+  </div>
+  <span class="detail-meta" id="watchStatus" style="margin-left:auto">connecting...</span>
+</div>
+<div class="warn" id="unknownWarn" style="display:none"></div>
+<div class="row">
+  <div class="tile"><div class="label">Cost</div><div class="value" id="totalCost">$0.00</div></div>
+  <div class="tile"><div class="label">Tokens</div><div class="value" id="totalTokens">0</div></div>
+  <div class="tile"><div class="label">Cold-cache turns</div><div class="value" id="coldCount">0</div></div>
+</div>
+
+<div id="sessionDetail">
+  <div class="transcript" id="transcript"><span class="tool-pending">Loading...</span></div>
+  <div class="turn-chart-panel">
+    <div class="controls" style="margin-bottom:6px;">
+      <span style="font-size:11px;color:var(--muted)">Per-turn usage:</span>
+      <select id="turnChartMetric">
+        <option value="in">Tokens In</option>
+        <option value="out">Tokens Out</option>
+        <option value="cache">Tokens Cached</option>
+        <option value="cost" selected>Cost ($)</option>
+      </select>
+      <span class="turn-chart-legend" id="turnChartLegend"></span>
+      <label class="toggle" id="hideColdCacheWrap" style="display:none">
+        <input type="checkbox" id="hideColdCacheToggle"> Hide cold-cache spikes
+      </label>
+    </div>
+    <svg id="turnChart" width="900" height="70"></svg>
+  </div>
+</div>
+
+<script>
+const PRICING = __PRICING_DATA__;
+
+function fmtUSD(v) {
+  // per-turn costs are frequently sub-cent; 2 decimals alone would round them to $0.
+  if (v > 0 && v < 0.01) return '$' + v.toFixed(4);
+  return '$' + v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+function fmtTok(v) {
+  if (v >= 1e6) return (v/1e6).toFixed(1) + 'M';
+  if (v >= 1e3) return (v/1e3).toFixed(1) + 'K';
+  return String(v);
+}
+
+// mirrors parse.py's cost_for_usage()
+function stepCost(model, usage) {
+  const rates = PRICING[model];
+  if (!rates) return null;
+  const cc = usage.cache_creation || {};
+  let write5m = cc.ephemeral_5m_input_tokens || 0;
+  const write1h = cc.ephemeral_1h_input_tokens || 0;
+  if (!usage.cache_creation && usage.cache_creation_input_tokens) write5m = usage.cache_creation_input_tokens;
+  const input = usage.input_tokens || 0;
+  const output = usage.output_tokens || 0;
+  const read = usage.cache_read_input_tokens || 0;
+  const cost = (input * rates.input + output * rates.output +
+    write5m * rates.cache_write_5m + write1h * rates.cache_write_1h + read * rates.cache_read) / 1e6;
+  const writeTokens = write5m + write1h;
+  return { cost, cacheTokens: writeTokens + read, writeTokens, readTokens: read };
+}
+
+function extractToolResultText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.map(b => {
+      if (b.type === 'text') return b.text;
+      if (b.type === 'tool_reference') return `[tool reference: ${b.tool_name}]`;
+      if (b.type === 'image') return '[image]';
+      return '';
+    }).filter(Boolean).join('\n');
+  }
+  return '';
+}
+
+// Set by the live glue code below. In the static/single-pass dashboard this project's
+// transcript renderer was adapted from, a tool_use and its tool_result always arrived in
+// the same parse (chunks were slices of an already-complete file). Here they routinely land
+// in different SSE ticks - the earlier turn (and its already-rendered "(no result
+// recorded)" DOM) can be minutes old by the time the result shows up. Without this hook, a
+// tool call taking longer than one poll tick would show no result forever.
+let onToolResult = null;
+
+function parseSessionJsonl(rawText, toolSteps) {
+  // toolSteps: tool_use id -> step object, mutated in place when its result arrives.
+  // Passed in (rather than created here) so it persists across chunk/poll boundaries.
+  if (!toolSteps) toolSteps = new Map();
+  const turns = [];
+
+  for (const line of rawText.split('\n')) {
+    if (!line.trim()) continue;
+    let d;
+    try { d = JSON.parse(line); } catch { continue; }
+
+    if (d.type === 'user') {
+      const content = d.message && d.message.content;
+      if (typeof content === 'string') {
+        if (content.trim()) turns.push({ role: 'user', ts: d.timestamp, blocks: [{ kind: 'text', text: content }] });
+      } else if (Array.isArray(content)) {
+        const hasToolResult = content.some(b => b.type === 'tool_result');
+        if (hasToolResult) {
+          content.forEach(b => {
+            if (b.type !== 'tool_result') return;
+            const step = toolSteps.get(b.tool_use_id);
+            if (step) {
+              step.result = { content: extractToolResultText(b.content), isError: !!b.is_error };
+              if (onToolResult) onToolResult(step);
+            }
+          });
+        } else {
+          const blocks = [];
+          content.forEach(b => {
+            if (b.type === 'text' && b.text) blocks.push({ kind: 'text', text: b.text });
+            else if (b.type === 'image') blocks.push({ kind: 'text', text: '[image attached]' });
+            else if (b.type === 'document') blocks.push({ kind: 'text', text: '[document attached]' });
+          });
+          if (blocks.length) turns.push({ role: 'user', ts: d.timestamp, blocks });
+        }
+      }
+    } else if (d.type === 'assistant') {
+      const msg = d.message || {};
+      const content = Array.isArray(msg.content) ? msg.content : [];
+      const blocks = [];
+      content.forEach(b => {
+        if (b.type === 'text' && b.text) blocks.push({ kind: 'text', text: b.text });
+        else if (b.type === 'thinking' && b.thinking) blocks.push({ kind: 'thinking', text: b.thinking });
+        else if (b.type === 'tool_use') {
+          const step = { id: b.id, name: b.name, input: b.input, result: null };
+          toolSteps.set(b.id, step);
+          blocks.push({ kind: 'tool', step });
+        }
+      });
+      if (blocks.length) turns.push({ role: 'assistant', ts: d.timestamp, model: msg.model, usage: msg.usage, blocks });
+    }
+  }
+  return turns;
+}
+
+function summarizeToolInput(input) {
+  if (!input) return '';
+  for (const key of ['file_path', 'pattern', 'query', 'url']) {
+    if (typeof input[key] === 'string') return input[key];
+  }
+  for (const key of ['command', 'prompt', 'description']) {
+    if (typeof input[key] === 'string') return input[key].length > 80 ? input[key].slice(0, 80) + '…' : input[key];
+  }
+  return '';
+}
+
+// paints (or repaints) a step's summary/result text from its current .result - split out
+// of renderToolStep so onToolResult (above) can call it again later, once, when a result
+// that wasn't available at initial render time finally arrives.
+function paintToolStep(step) {
+  if (!step._summaryEl || !step._resultEl) return;
+  const inputSummary = summarizeToolInput(step.input);
+  step._summaryEl.textContent = `🔧 ${step.name}${inputSummary ? ' — ' + inputSummary : ''}` +
+    (step.result && step.result.isError ? ' (error)' : '');
+  if (step.result) {
+    step._resultEl.className = step.result.isError ? 'tool-result-error' : '';
+    step._resultEl.textContent = step.result.content || '(empty result)';
+  } else {
+    step._resultEl.className = 'tool-pending';
+    step._resultEl.textContent = '(no result recorded)';
+  }
+}
+
+function renderToolStep(step) {
+  const details = document.createElement('details');
+  details.className = 'tool-step';
+  const summary = document.createElement('summary');
+  details.appendChild(summary);
+
+  const body = document.createElement('div');
+  body.className = 'tool-body';
+  const inputDiv = document.createElement('div');
+  inputDiv.className = 'tool-input';
+  inputDiv.textContent = 'Input: ' + JSON.stringify(step.input, null, 2);
+  body.appendChild(inputDiv);
+  const resultDiv = document.createElement('div');
+  body.appendChild(resultDiv);
+  details.appendChild(body);
+
+  step._summaryEl = summary;
+  step._resultEl = resultDiv;
+  paintToolStep(step);
+  return details;
+}
+
+function turnPreview(turn) {
+  const textBlock = turn.blocks.find(b => b.kind === 'text');
+  if (textBlock) {
+    const t = textBlock.text.replace(/\s+/g, ' ').trim();
+    return t.length > 100 ? t.slice(0, 100) + '…' : t;
+  }
+  const toolBlocks = turn.blocks.filter(b => b.kind === 'tool');
+  if (toolBlocks.length) return toolBlocks.map(b => b.step.name).join(', ');
+  if (turn.blocks.some(b => b.kind === 'thinking')) return '🧠 thinking';
+  return '';
+}
+
+function makeTranscriptHeaderRow() {
+  const row = document.createElement('div');
+  row.className = 'turn-head-labels turn-grid-cols';
+  ['', 'In', 'Out', 'Cached', '$', '', ''].forEach((label, i) => {
+    const cell = document.createElement('span');
+    if (i >= 1 && i <= 4) cell.className = 'turn-num';
+    cell.textContent = label;
+    row.appendChild(cell);
+  });
+  return row;
+}
+
+let turnUsagePoints = []; // per assistant-turn {div, head, inTok, outTok, cacheTok, cost, coldCache}
+
+// builds one turn's DOM and (for assistant turns) pushes its usage point; does not
+// attach the element anywhere, so callers can append (live tail) or insert-before (load
+// earlier history) without duplicating this ~90-line block.
+function buildTurnEl(turn) {
+  const div = document.createElement('div');
+  div.className = 'turn turn-' + turn.role; // folded by default: no 'expanded' class
+
+  const head = document.createElement('div');
+  head.className = 'turn-head turn-grid-cols';
+
+  const timeSpan = document.createElement('span');
+  timeSpan.className = 'turn-time';
+  timeSpan.textContent = turn.ts ? new Date(turn.ts).toLocaleTimeString() : '';
+  head.appendChild(timeSpan);
+
+  let inTok = 0, outTok = 0, cacheTok = 0, cost = null, coldCache = false, coldCacheTitle = '';
+  if (turn.role === 'assistant' && turn.usage) {
+    const u = turn.usage;
+    inTok = u.input_tokens || 0;
+    outTok = u.output_tokens || 0;
+    const costInfo = turn.model ? stepCost(turn.model, u) : null;
+    cacheTok = costInfo ? costInfo.cacheTokens : 0;
+    cost = costInfo ? costInfo.cost : 0;
+    if (costInfo && costInfo.writeTokens > 0 && costInfo.writeTokens >= costInfo.readTokens) {
+      coldCache = true;
+      coldCacheTitle = `Cache mostly missed this turn: ${fmtTok(costInfo.writeTokens)} tokens had to be rewritten vs only ${fmtTok(costInfo.readTokens)} read from cache - likely returned to this session after the cache window expired.`;
+    }
+    turnUsagePoints.push({ div, head, inTok, outTok, cacheTok, cost: cost || 0, coldCache });
+  }
+  const numCell = (text, opts) => {
+    const c = document.createElement('span');
+    c.className = 'turn-num' + (opts && opts.cls ? ' ' + opts.cls : '');
+    c.textContent = text;
+    if (opts && opts.title) c.title = opts.title;
+    return c;
+  };
+  head.appendChild(numCell(inTok ? fmtTok(inTok) : ''));
+  head.appendChild(numCell(outTok ? fmtTok(outTok) : ''));
+  head.appendChild(numCell(cacheTok ? fmtTok(cacheTok) : ''));
+  head.appendChild(numCell(cost ? fmtUSD(cost) : '', coldCache ? { cls: 'cold-cache', title: coldCacheTitle } : null));
+
+  const chevron = document.createElement('span');
+  chevron.className = 'turn-chevron';
+  chevron.textContent = '▸';
+  head.appendChild(chevron);
+
+  const roletext = document.createElement('span');
+  roletext.className = 'turn-roletext';
+  const dot = document.createElement('span');
+  dot.className = 'role-dot role-dot-' + turn.role;
+  dot.title = turn.role === 'user' ? 'You' : 'Claude';
+  roletext.appendChild(dot);
+  const previewSpan = document.createElement('span');
+  previewSpan.className = 'turn-preview';
+  previewSpan.textContent = turnPreview(turn);
+  roletext.appendChild(previewSpan);
+  head.appendChild(roletext);
+
+  head.addEventListener('click', () => {
+    const expanded = div.classList.toggle('expanded');
+    chevron.textContent = expanded ? '▾' : '▸';
+  });
+  div.appendChild(head);
+
+  const body = document.createElement('div');
+  body.className = 'turn-body';
+  turn.blocks.forEach(b => {
+    if (b.kind === 'text') {
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = b.text;
+      body.appendChild(bubble);
+    } else if (b.kind === 'thinking') {
+      const details = document.createElement('details');
+      details.className = 'thinking-block';
+      const summary = document.createElement('summary');
+      summary.textContent = '🧠 Thinking';
+      details.appendChild(summary);
+      const tbody = document.createElement('div');
+      tbody.className = 'thinking-body';
+      tbody.textContent = b.text;
+      details.appendChild(tbody);
+      body.appendChild(details);
+    } else if (b.kind === 'tool') {
+      body.appendChild(renderToolStep(b.step));
+    }
+  });
+  div.appendChild(body);
+  return div;
+}
+
+function appendTranscriptTurns(container, turns) {
+  turns.forEach(turn => container.appendChild(buildTurnEl(turn)));
+  renderTurnChart();
+  queueMaxHighlightUpdate();
+}
+
+// inserts turns (already in chronological order) right after the header row, and
+// splices their usage points to the front of turnUsagePoints so the mini-chart stays
+// left-to-right chronological after "load full history" pulls in earlier turns.
+function prependTranscriptTurns(container, turns) {
+  const headerRow = container.querySelector('.turn-head-labels');
+  const anchor = headerRow ? headerRow.nextSibling : container.firstChild;
+  const frag = document.createDocumentFragment();
+  const newPoints = [];
+  turns.forEach(turn => {
+    const beforeLen = turnUsagePoints.length;
+    frag.appendChild(buildTurnEl(turn));
+    // the pop happens right after each push, so newPoints already comes out in the same
+    // (chronological) order turns were processed in - do NOT .reverse() this below, that
+    // would put the reloaded-history region of the chart backwards.
+    if (turnUsagePoints.length > beforeLen) newPoints.push(turnUsagePoints.pop());
+  });
+  turnUsagePoints = newPoints.concat(turnUsagePoints);
+  container.insertBefore(frag, anchor);
+  renderTurnChart();
+  queueMaxHighlightUpdate();
+}
+
+const TOKEN_COLORS = { in: '#2dd4a7', out: '#5b8def', cache: '#8b929c' };
+const COST_COLOR = '#f0b90b';
+const METRIC_CONF = {
+  in: { get: p => p.inTok, color: TOKEN_COLORS.in, highlightBg: 'rgba(45,212,167,0.18)' },
+  out: { get: p => p.outTok, color: TOKEN_COLORS.out, highlightBg: 'rgba(91,141,239,0.18)' },
+  cache: { get: p => p.cacheTok, color: TOKEN_COLORS.cache, highlightBg: 'rgba(139,146,156,0.18)' },
+  cost: { get: p => p.cost, color: COST_COLOR, highlightBg: 'rgba(240,185,11,0.18)' },
+};
+
+function renderTurnChart() {
+  const svg = document.getElementById('turnChart');
+  const legend = document.getElementById('turnChartLegend');
+  svg.innerHTML = '';
+  legend.innerHTML = '';
+  const metric = document.getElementById('turnChartMetric').value;
+  const conf = METRIC_CONF[metric];
+
+  const hideColdCacheWrap = document.getElementById('hideColdCacheWrap');
+  hideColdCacheWrap.style.display = metric === 'cost' ? 'inline-flex' : 'none';
+  const hidingColdCache = metric === 'cost' && document.getElementById('hideColdCacheToggle').checked;
+
+  const n = turnUsagePoints.length;
+  if (n === 0) return;
+  const W = svg.clientWidth || 900;
+  svg.setAttribute('width', W);
+  const H = svg.height.baseVal.value;
+  const step = W / n;
+  const barW = Math.max(1, step - 1);
+
+  let maxVal = 0;
+  turnUsagePoints.forEach(p => {
+    if (hidingColdCache && p.coldCache) return;
+    const v = conf.get(p);
+    if (v > maxVal) maxVal = v;
+  });
+  maxVal = maxVal * 1.1 || 1;
+
+  const rectNS = (x, y, w, h, fill) => {
+    const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    r.setAttribute('x', x); r.setAttribute('y', y);
+    r.setAttribute('width', w); r.setAttribute('height', h);
+    r.setAttribute('fill', fill);
+    svg.appendChild(r);
+  };
+
+  turnUsagePoints.forEach((p, i) => {
+    if (hidingColdCache && p.coldCache) return;
+    const x = i * step;
+    const v = conf.get(p);
+    const h = (v / maxVal) * H;
+    const fill = (metric === 'cost' && p.coldCache) ? '#f0648b' : conf.color;
+    if (h > 0) rectNS(x, H - h, barW, h, fill);
+  });
+
+  const overlay = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  overlay.setAttribute('id', 'turnChartOverlay');
+  overlay.setAttribute('class', 'turn-chart-overlay');
+  overlay.setAttribute('y', 0);
+  overlay.setAttribute('height', H);
+  svg.appendChild(overlay);
+  overlay.addEventListener('mousedown', (e) => { chartDragging = true; e.preventDefault(); });
+
+  updateChartOverlay();
+}
+
+let chartDragging = false;
+
+function updateChartOverlay() {
+  const el = document.getElementById('transcript');
+  const svg = document.getElementById('turnChart');
+  const overlay = document.getElementById('turnChartOverlay');
+  if (!overlay) return;
+  const W = svg.clientWidth || 900;
+  const scrollable = el.scrollHeight > el.clientHeight;
+  const frac = scrollable ? el.clientHeight / el.scrollHeight : 1;
+  const startFrac = scrollable ? el.scrollTop / el.scrollHeight : 0;
+  overlay.setAttribute('x', startFrac * W);
+  overlay.setAttribute('width', Math.max(4, frac * W));
+}
+
+// approximate: maps a fraction of the chart's width to the same fraction of the
+// transcript's scrollable height. Good enough for a minimap-style overview.
+function scrollTranscriptToChartFrac(frac) {
+  const el = document.getElementById('transcript');
+  el.scrollTop = frac * el.scrollHeight;
+}
+
+function chartXToFrac(e) {
+  const svg = document.getElementById('turnChart');
+  const rect = svg.getBoundingClientRect();
+  return Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+}
+
+document.getElementById('turnChart').addEventListener('mousedown', (e) => {
+  if (e.target.id === 'turnChartOverlay') return; // overlay has its own mousedown handler
+  chartDragging = true;
+  scrollTranscriptToChartFrac(chartXToFrac(e));
+});
+window.addEventListener('mousemove', (e) => {
+  if (!chartDragging) return;
+  scrollTranscriptToChartFrac(chartXToFrac(e));
+});
+window.addEventListener('mouseup', () => { chartDragging = false; });
+
+document.getElementById('turnChartMetric').addEventListener('change', () => { renderTurnChart(); queueMaxHighlightUpdate(); });
+document.getElementById('hideColdCacheToggle').addEventListener('change', () => { renderTurnChart(); queueMaxHighlightUpdate(); });
+window.addEventListener('resize', () => { if (turnUsagePoints.length) { renderTurnChart(); queueMaxHighlightUpdate(); } });
+
+let currentMaxHead = null;
+let maxHighlightQueued = false;
+
+function updateVisibleMaxHighlight() {
+  maxHighlightQueued = false;
+  const metric = document.getElementById('turnChartMetric').value;
+  const conf = METRIC_CONF[metric];
+  const hidingColdCache = metric === 'cost' && document.getElementById('hideColdCacheToggle').checked;
+  const el = document.getElementById('transcript');
+  const top = el.getBoundingClientRect().top;
+  const bottom = top + el.clientHeight;
+
+  let best = null, bestVal = 0;
+  for (const p of turnUsagePoints) {
+    if (hidingColdCache && p.coldCache) continue;
+    const v = conf.get(p);
+    if (!v) continue;
+    const r = p.head.getBoundingClientRect();
+    if (r.bottom <= top || r.top >= bottom) continue; // not visible
+    if (!best || v > bestVal) { best = p; bestVal = v; }
+  }
+
+  if (currentMaxHead && currentMaxHead !== (best && best.head)) {
+    currentMaxHead.classList.remove('visible-max-metric');
+    currentMaxHead.style.background = '';
+  }
+  currentMaxHead = best ? best.head : null;
+  if (currentMaxHead) {
+    currentMaxHead.classList.add('visible-max-metric');
+    currentMaxHead.style.background = conf.highlightBg;
+  }
+}
+
+function queueMaxHighlightUpdate() {
+  if (maxHighlightQueued) return;
+  maxHighlightQueued = true;
+  requestAnimationFrame(updateVisibleMaxHighlight);
+}
+
+function setAllTurnsExpanded(expanded) {
+  document.querySelectorAll('#transcript .turn').forEach(div => {
+    div.classList.toggle('expanded', expanded);
+    const chevron = div.querySelector('.turn-chevron');
+    if (chevron) chevron.textContent = expanded ? '▾' : '▸';
+  });
+}
+document.getElementById('expandAllBtn').addEventListener('click', () => setAllTurnsExpanded(true));
+document.getElementById('collapseAllBtn').addEventListener('click', () => setAllTurnsExpanded(false));
+
+// --- live-tail glue: everything above is copied/adapted from claude-usage's
+// dashboard_template.html; everything below is new to this tool. ---
+
+let offset = 0;
+let toolSteps = new Map();
+let eventSource = null;
+let reconnectTimer = null;
+let userScrolledUp = false;
+const unknownModels = new Set();
+// Bumped by loadInitial (page load and every `reset` from a detected truncation/rotation).
+// loadFullHistory captures this before its await and checks it after - if a reset landed
+// mid-fetch, the transcript it was about to prepend into no longer exists (loadInitial
+// already wiped and rebuilt it), so it must discard its result instead of prepending
+// stale pre-reset turns into the fresh one.
+let generation = 0;
+
+const transcriptEl = document.getElementById('transcript');
+onToolResult = paintToolStep;
+
+function isAtBottom() {
+  return transcriptEl.scrollHeight - transcriptEl.scrollTop - transcriptEl.clientHeight < 40;
+}
+
+transcriptEl.addEventListener('scroll', () => {
+  updateChartOverlay();
+  queueMaxHighlightUpdate();
+  userScrolledUp = !isAtBottom();
+});
+
+function trackModel(turn) {
+  if (turn.role !== 'assistant' || !turn.model) return;
+  if (PRICING[turn.model] || unknownModels.has(turn.model)) return;
+  unknownModels.add(turn.model);
+  const w = document.getElementById('unknownWarn');
+  w.style.display = 'block';
+  w.textContent = 'Unpriced model(s), cost shown as $0 for: ' + Array.from(unknownModels).join(', ');
+}
+
+function updateTotals() {
+  let cost = 0, inTok = 0, outTok = 0, cacheTok = 0, cold = 0;
+  turnUsagePoints.forEach(p => {
+    cost += p.cost; inTok += p.inTok; outTok += p.outTok; cacheTok += p.cacheTok;
+    if (p.coldCache) cold++;
+  });
+  document.getElementById('totalCost').textContent = fmtUSD(cost);
+  document.getElementById('totalTokens').textContent = fmtTok(inTok + outTok + cacheTok);
+  document.getElementById('coldCount').textContent = String(cold);
+}
+
+function setStatus(text) {
+  document.getElementById('watchStatus').textContent = text;
+}
+
+function appendLiveTurns(turns) {
+  if (!turns.length) return;
+  turns.forEach(trackModel);
+  const wasAtBottom = !userScrolledUp;
+  appendTranscriptTurns(transcriptEl, turns);
+  updateTotals();
+  if (wasAtBottom && !chartDragging) transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
+function connectEvents() {
+  if (eventSource) eventSource.close();
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  // Deliberately not relying on EventSource's native reconnect: it would replay from the
+  // URL's original ?since=, which is now stale and would duplicate every turn seen so far.
+  eventSource = new EventSource('events?since=' + offset);
+  eventSource.addEventListener('reset', () => {
+    eventSource.close();
+    loadInitial();
+  });
+  eventSource.onmessage = (e) => {
+    const chunk = JSON.parse(e.data);
+    if (chunk.size <= offset) return; // stale/duplicate
+    const turns = parseSessionJsonl(chunk.text, toolSteps);
+    offset = chunk.size;
+    appendLiveTurns(turns);
+    setStatus('Last update: ' + new Date().toLocaleTimeString());
+  };
+  eventSource.onerror = () => {
+    eventSource.close();
+    setStatus('Reconnecting...');
+    reconnectTimer = setTimeout(connectEvents, 1500);
+  };
+}
+
+async function loadFullHistory(btn, beforeOffset) {
+  const myGen = generation;
+  btn.disabled = true;
+  btn.textContent = 'Loading...';
+  try {
+    const res = await fetch('history?before=' + beforeOffset);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (myGen !== generation) return; // a reset rebuilt the transcript while this was in flight
+    // Separate Map, not the shared `toolSteps`: earlier history is expected to be
+    // self-contained (a tool_use and its tool_result both land before the tail cut point in
+    // the overwhelming majority of cases). Reusing the live `toolSteps` map here would risk a
+    // rare edge case overwriting an already-resolved step right at the tail boundary.
+    const earlierToolSteps = new Map();
+    const turns = parseSessionJsonl(data.text, earlierToolSteps);
+    turns.forEach(trackModel);
+    prependTranscriptTurns(transcriptEl, turns);
+    btn.remove();
+    updateTotals();
+  } catch (err) {
+    if (myGen !== generation) return;
+    btn.disabled = false;
+    btn.textContent = 'Load full history (failed, click to retry)';
+  }
+}
+
+async function loadInitial() {
+  const myGen = ++generation;
+  if (eventSource) { eventSource.close(); eventSource = null; }
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+
+  transcriptEl.innerHTML = '';
+  transcriptEl.appendChild(makeTranscriptHeaderRow());
+  turnUsagePoints = [];
+  toolSteps = new Map();
+  currentMaxHead = null;
+  setStatus('Loading...');
+
+  try {
+    const res = await fetch('initial?tail=200000');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (myGen !== generation) return; // superseded by a newer loadInitial before this resolved
+
+    offset = data.size;
+    const turns = parseSessionJsonl(data.text, toolSteps);
+    turns.forEach(trackModel);
+    appendTranscriptTurns(transcriptEl, turns);
+
+    if (data.truncated) {
+      const btn = document.createElement('button');
+      btn.className = 'load-more-btn';
+      btn.textContent = 'Load full history';
+      btn.addEventListener('click', () => loadFullHistory(btn, data.start));
+      const headerRow = transcriptEl.querySelector('.turn-head-labels');
+      transcriptEl.insertBefore(btn, headerRow ? headerRow.nextSibling : transcriptEl.firstChild);
+    }
+
+    transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    updateTotals();
+    setStatus('Watching for new turns...');
+    connectEvents();
+  } catch (err) {
+    if (myGen !== generation) return;
+    setStatus('Failed to load transcript: ' + err.message);
+  }
+}
+
+loadInitial();
+</script>
+</body>
+</html>
