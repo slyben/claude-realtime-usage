@@ -111,6 +111,41 @@ The watcher is a plain foreground process when run manually - `Ctrl+C` to stop i
 via the skill's `run_in_background`, it's a child of that session's shell and exits automatically
 when the Claude Code session does.
 
+### `/clear` orphans the watcher
+
+`/clear` doesn't end the CLI session or kill its background shell - it rotates the session onto a
+brand-new `.jsonl` transcript file, same session process, same background watcher. The watcher's
+`--session` is fixed at startup, so it keeps tailing the old, now-dead file and the browser tab
+just goes quiet. Simplest fix: re-run `/watch-live` after a `/clear` - it targets *this* session's
+current UUID and starts a fresh watcher.
+
+To also reap the orphaned process automatically instead of leaving it running until the session
+ends, add a `SessionStart` hook with `matcher: "clear"` to your **user** `~/.claude/settings.json`
+(not this repo's project settings - it needs to fire for any project you run `/watch-live` in). It
+scans `live_watcher.py`'s own lockfile directory for any lockfile pointing at a `.jsonl` in the
+same project that isn't this new session's transcript, and kills its recorded PID:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.transcript_path // empty' | { read -r NEWPATH; if [ -z \"$NEWPATH\" ]; then exit 0; fi; DIR=$(dirname \"$NEWPATH\"); LOCKDIR=$(python3 -c \"import tempfile,os;print(os.path.join(tempfile.gettempdir(),'live_watcher'))\"); for f in \"$LOCKDIR\"/*.json; do [ -f \"$f\" ] || continue; OLDPATH=$(jq -r '.jsonl_path // empty' \"$f\" 2>/dev/null); [ -z \"$OLDPATH\" ] && continue; [ \"$OLDPATH\" = \"$NEWPATH\" ] && continue; [ \"$(dirname \"$OLDPATH\")\" = \"$DIR\" ] || continue; PID=$(jq -r '.pid // empty' \"$f\" 2>/dev/null); [ -n \"$PID\" ] && kill \"$PID\" 2>/dev/null; rm -f \"$f\" \"${f%.json}.lock\"; done; exit 0; } 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Not bundled or auto-installed by this repo - it's a personal convenience, opt in by hand. Merge it
+into your existing `hooks.SessionStart` array rather than replacing it.
+
 ## Files
 
 - `live_watcher.py` - stdlib-only Python server (no dependencies to install).
