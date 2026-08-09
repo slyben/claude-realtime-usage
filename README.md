@@ -10,6 +10,12 @@ per-model USD/MTok rates; keep it in sync with
 (e.g. the sonnet-5 intro price reverting 2026-09-01) - if a model is missing here the live view
 shows a persistent "unpriced model" banner rather than a silently wrong number.
 
+**Local only**: it reads the session's `.jsonl` file already sitting on disk - no calls to
+Anthropic or anywhere else, no network access beyond serving `127.0.0.1` to your own browser. And
+the watcher isn't a standalone background service you have to remember to stop: it's a child
+process of the Claude Code session it's watching, so it exits automatically the moment that
+session ends.
+
 **Inherent limitation, not a bug**: a JSONL turn only exists once it's fully written, so this can
 never show more than "one turn behind" the CLI.
 
@@ -33,6 +39,14 @@ install step. Just say:
 
 (or type `/watch-live` directly) and Claude will start the server and open the transcript in a
 browser tab.
+
+For regular use, promote the skill to user scope instead of leaving it project-local: copy (or
+symlink) `.claude/skills/watch-live/` to `~/.claude/skills/watch-live/`. A user-scoped skill loads
+for every project's Claude Code sessions, not just when this repo happens to be the active one -
+worth doing since `live_watcher.py`/`live_watcher_template.html` are resolved by the skill via
+`cd`, not baked into the skill file itself, so the skill keeps working from any project once it's
+promoted (as long as this repo stays checked out somewhere and the skill's `cd` step is pointed
+at it).
 
 ## Demo
 
