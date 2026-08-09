@@ -4,3 +4,5 @@ __pycache__/
 .venv/
 .claude/settings.local.json
 backlog.md
+usage/output/
+.DS_Store

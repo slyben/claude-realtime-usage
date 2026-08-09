@@ -15,10 +15,12 @@ exits - this tool never guesses which session to watch (see README).
 import argparse
 import atexit
 import glob
+import html as html_module
 import json
 import os
 import re
 import secrets
+import subprocess
 import sys
 import tempfile
 import threading
@@ -32,8 +34,13 @@ TEMPLATE_PATH = TOOL_DIR / "live_watcher_template.html"
 PRICING_PATH = TOOL_DIR / "pricing.json"
 LOCK_DIR = Path(tempfile.gettempdir()) / "live_watcher"
 
+# Bundled all-sessions/all-time usage dashboard tool (its own README/skill live under here too).
+# The "All-time usage" button in the UI shells out to it.
+CLAUDE_USAGE_DIR = TOOL_DIR / "usage"
+
 UUID_RE = re.compile(r"^[0-9a-f-]{36}$", re.IGNORECASE)
 AGENT_ID_RE = re.compile(r"^[0-9a-f]{17}$")
+USAGE_SESSION_FILE_RE = re.compile(r"^[A-Za-z0-9_-]+\.(js|txt)$")
 
 
 def read_project_folder(jsonl_path):
@@ -254,6 +261,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_events(qs)
         if sub == "/agents":
             return self._handle_agents()
+        if sub == "/usage":
+            return self._handle_usage_dashboard()
+        m3 = re.match(r"^/sessions/([^/]+)$", sub)
+        if m3:
+            return self._handle_usage_session_file(m3.group(1))
         self.send_error(404)
 
     def _dispatch_agent(self, agent_id, agent_sub, qs):
@@ -448,6 +460,98 @@ class Handler(BaseHTTPRequestHandler):
                     "hasTranscript": jsonl_path.is_file(),
                 })
         self._send_json(200, {"agents": agents})
+
+    def _send_usage_error(self, message, back_url):
+        # Plain page, not JSON - this is meant to be read directly in the tab the button
+        # navigated, with a way back, not machine-parsed.
+        body = (
+            "<!doctype html><html><body style=\"font-family:-apple-system,BlinkMacSystemFont,"
+            "'Segoe UI',sans-serif;background:#0b0d10;color:#e6e8eb;padding:24px;\">"
+            f"<p><a href=\"{back_url}\" style=\"color:#2dd4a7;\">&larr; Back to live session</a></p>"
+            f"<pre style=\"white-space:pre-wrap;\">{html_module.escape(message)}</pre>"
+            "</body></html>"
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_usage_dashboard(self):
+        # Runs the bundled claude-usage tool's two-step pipeline fresh on every click (same as
+        # its own /claude-usage skill does) so the numbers are current, then serves the HTML it
+        # produces with a link back injected. Its own dashboard_template.html lazily loads a
+        # per-session transcript file for its click-to-replay view - see
+        # _handle_usage_session_file for the route that serves those.
+        back_url = f"/t/{self.server.token}/"
+        parse_script = CLAUDE_USAGE_DIR / "parse.py"
+        build_script = CLAUDE_USAGE_DIR / "build_dashboard.py"
+        dashboard_path = CLAUDE_USAGE_DIR / "output" / "dashboard.html"
+
+        if not parse_script.is_file() or not build_script.is_file():
+            return self._send_usage_error(
+                f"claude-usage tool not found at {CLAUDE_USAGE_DIR} - expected it bundled in "
+                "this repo's usage/ folder. Nothing to show.",
+                back_url,
+            )
+
+        for script in (parse_script, build_script):
+            try:
+                result = subprocess.run(
+                    [sys.executable, str(script)],
+                    cwd=str(CLAUDE_USAGE_DIR),
+                    capture_output=True, text=True, timeout=120,
+                )
+            except subprocess.TimeoutExpired:
+                return self._send_usage_error(f"{script.name} timed out after 120s.", back_url)
+            if result.returncode != 0:
+                return self._send_usage_error(
+                    f"{script.name} failed (exit {result.returncode}):\n{result.stderr[-4000:]}",
+                    back_url,
+                )
+
+        try:
+            html = dashboard_path.read_text(encoding="utf-8")
+        except OSError as e:
+            return self._send_usage_error(f"Couldn't read {dashboard_path}: {e}", back_url)
+
+        banner = (
+            '<div style="padding:8px 14px;background:#12151a;border-bottom:1px solid #22262d;'
+            "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;\">"
+            f'<a href="{back_url}" style="color:#2dd4a7;text-decoration:none;">&larr; Back to '
+            "live session</a></div>"
+        )
+        html = html.replace("<body>", "<body>" + banner, 1)
+        body = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_usage_session_file(self, filename):
+        # The usage dashboard's session-click-to-replay view lazily loads a per-session file
+        # relative to wherever dashboard.html was served from - the plain .txt sibling when
+        # served over http (this route), the .js `<script src>` form only when opened directly
+        # via file:// (see dashboard_template.html's showSessionDetail). filename is
+        # regex-validated against the exact charset that tool's own
+        # safeFilename()/safe_filename() produce (alnum/underscore/hyphen + ".js"/".txt") before
+        # ever touching the filesystem, so it can't contain "/" or "..".
+        if not USAGE_SESSION_FILE_RE.match(filename):
+            return self.send_error(404)
+        path = CLAUDE_USAGE_DIR / "output" / "sessions" / filename
+        if not path.is_file():
+            return self.send_error(404)
+        content_type = "application/javascript" if filename.endswith(".js") else "text/plain"
+        body = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", f"{content_type}; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
 
 
 class Server(ThreadingHTTPServer):

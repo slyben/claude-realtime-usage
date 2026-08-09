@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template, not a live launchd config - __HOME__ is a placeholder, not a
+  real path. Don't load this file directly with launchctl.
+
+  To install/reinstall:  ~/tools/claude-usage/install_launchd.sh
+    This substitutes __HOME__ for $HOME and writes the real plist to
+    ~/Library/LaunchAgents/com.claude-usage.session-archive.plist, then
+    (re)loads it. Re-run the script any time you edit this template.
+
+  To check it's running:  launchctl list | grep com.claude-usage.session-archive
+  To see its output:      tail ~/Backups/claude-projects/archive.log
+  To uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.claude-usage.session-archive.plist
+    rm ~/Library/LaunchAgents/com.claude-usage.session-archive.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude-usage.session-archive</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__HOME__/tools/claude-usage/archive_sessions.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Backups/claude-projects/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Backups/claude-projects/launchd.err.log</string>
+</dict>
+</plist>

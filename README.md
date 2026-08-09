@@ -35,6 +35,20 @@ Only direct (depth-1) subagents are shown - a subagent spawning its own subagent
 yet. The per-turn mini chart stays main-session-only (a subagent run has no single turn position
 in that timeline); its cost is folded into the tiles above the chart, not into the bars.
 
+**"All-time usage" button**: sits at the right of the tiles row.
+
+![All-time usage button](usage-button.png)
+
+Bundled in `usage/` is a separate, self-contained tool
+([its own README](usage/README.md)) that builds an all-sessions/all-time dashboard - distinct
+from this repo's own single-live-session view. The button re-runs its two-step pipeline
+(`parse.py` + `build_dashboard.py`) fresh on every click and serves the result, with a link back
+to the live session. Clicking a session row there replays its full transcript inline, fetched from
+this same server (a plain `fetch()`, not the `<script src>` trick that tool's own standalone
+`file://` mode needs, since a real `http://` origin doesn't have that restriction) - both modes
+share the one `dashboard_template.html`, branching on `location.protocol`. `usage/` can be used
+standalone too (see its README) - it doesn't depend on anything else in this repo.
+
 **Vibe-coded**: this was built almost entirely by Claude Code itself, with human review and a
 couple of adversarial LLM review passes rather than exhaustive manual auditing. It's a personal
 tool, not a security-hardened product - use at your own risk, and read the code before trusting
@@ -75,9 +89,10 @@ cold-cache flags) reflects current behavior.
 ## Usage
 
 The intended way to use this is the `/watch-live` skill (`.claude/skills/watch-live/`), which
-starts the server as a background process for *this exact session* and opens it in a Playwright
-tab automatically - this requires the Playwright MCP plugin to be enabled in Claude Code. See
-that skill for the concrete steps.
+starts the server as a background process for *this exact session* and prints the URL - open it
+in whatever browser you normally use. `/watch-live auto` additionally opens it for you in a
+Playwright-controlled tab, if the Playwright MCP plugin is connected. See that skill for the
+concrete steps.
 
 To run it manually instead:
 
@@ -102,6 +117,8 @@ when the Claude Code session does.
 - `live_watcher_template.html` - the browser-side transcript/chart renderer.
 - `pricing.json` - per-model USD/MTok rates, own copy (see note above).
 - `.claude/skills/watch-live/` - the `/watch-live` skill.
+- `usage/` - the bundled all-sessions/all-time dashboard tool behind the "All-time usage" button
+  (own README, own `pricing.json`, own `/claude-usage` skill - see [usage/README.md](usage/README.md)).
 
 Both the server and the `/watch-live` skill are cross-platform (macOS/Linux/Windows) - the skill
 branches its Python invocation (`python3` vs `python`) and stop fallback (`kill` vs `taskkill`) by
