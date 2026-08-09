@@ -123,7 +123,13 @@ To also reap the orphaned process automatically instead of leaving it running un
 ends, add a `SessionStart` hook with `matcher: "clear"` to your **user** `~/.claude/settings.json`
 (not this repo's project settings - it needs to fire for any project you run `/watch-live` in). It
 scans `live_watcher.py`'s own lockfile directory for any lockfile pointing at a `.jsonl` in the
-same project that isn't this new session's transcript, and kills its recorded PID:
+same project that isn't this new session's transcript, and kills its recorded PID.
+
+**macOS/Linux only** - the command is bash (`dirname`, `read -r`, `${f%.json}`, `python3`), and
+Claude Code hooks default to PowerShell on native Windows unless Git Bash is detected and
+`"shell": "bash"` is set explicitly; even then, Windows Python installs typically expose `python`,
+not `python3` (see the `/watch-live` skill's own platform note). No PowerShell equivalent is
+provided here - untested and not worth shipping unverified.
 
 ```json
 {
