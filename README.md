@@ -1,8 +1,12 @@
 # claude-realtime-usage
 
-Tails one active Claude Code session's `.jsonl` transcript and serves a live chat-transcript view
-(per-turn cost/tokens, cold-cache flags, a draggable mini usage chart) in a browser tab, updated
-roughly one turn behind the CLI.
+Tails one active Claude Code CLI session's `.jsonl` transcript and serves a live chat-transcript
+view (per-turn cost/tokens, cold-cache flags, a draggable mini usage chart) in a browser tab,
+updated roughly one turn behind the CLI.
+
+Works for local session logs under `~/.claude/projects/` - the CLI, and likely the IDE extensions
+(VS Code/JetBrains), since they drive the same local session format. It will **not** work for the
+web app (claude.ai/code): that's cloud-hosted, with no local `.jsonl` file for this tool to tail.
 
 Standalone, no external dependencies beyond the Python standard library. `pricing.json` holds
 per-model USD/MTok rates; keep it in sync with
@@ -18,6 +22,14 @@ session ends.
 
 **Inherent limitation, not a bug**: a JSONL turn only exists once it's fully written, so this can
 never show more than "one turn behind" the CLI.
+
+**Cost/token totals exclude subagent runs**: when the CLI spawns a subagent (the Task/Agent
+tool - e.g. an Explore or Plan-review agent), that subagent's transcript is written to a separate
+file under `<session-id>/subagents/`, not into the main session's own `.jsonl`. This tool only
+tails the main session file, so a subagent's tokens and cost never show up in the totals here,
+even after "Load full history" - they're not truncated out, they were never read in the first
+place. The CLI's own `/cost` command includes them; this tool's totals will read lower for any
+session that used subagents, sometimes substantially (e.g. Opus-model review agents).
 
 **Vibe-coded**: this was built almost entirely by Claude Code itself, with human review and a
 couple of adversarial LLM review passes rather than exhaustive manual auditing. It's a personal
