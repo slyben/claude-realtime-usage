@@ -115,6 +115,9 @@ stopped; skip the browser step.
   explicitly is only needed if you want to stop it while the session is still open.
 - It's bound to `127.0.0.1` only and every URL includes a random token, so it's not reachable
   from the network and can't be guessed by another local page.
+- Subagent (Task/Agent-tool) transcripts show up nested inside their spawning tool call once
+  expanded, each with its own "open in new tab" link - this skill only ever needs to open the
+  main session's URL; it doesn't need to discover or open subagent tabs itself.
 - If the sonnet-5 intro pricing (or any model's rate) has changed, update `pricing.json` in this
   repo directly (against https://www.anthropic.com/pricing). If you also use the sibling
   `claude-usage` dashboard tool locally, its `pricing.json` is a separate copy by design (this

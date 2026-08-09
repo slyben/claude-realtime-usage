@@ -33,6 +33,41 @@ PRICING_PATH = TOOL_DIR / "pricing.json"
 LOCK_DIR = Path(tempfile.gettempdir()) / "live_watcher"
 
 UUID_RE = re.compile(r"^[0-9a-f-]{36}$", re.IGNORECASE)
+AGENT_ID_RE = re.compile(r"^[0-9a-f]{17}$")
+
+
+def read_project_folder(jsonl_path):
+    # Last two path components of the session's own recorded `cwd` (e.g.
+    # "Claude/claude-realtime-usage"), for the browser tab title - more informative than one
+    # segment alone when projects are nested under a shared parent like ~/Development/Code/Claude.
+    try:
+        with open(jsonl_path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except Exception:
+                    continue
+                cwd = d.get("cwd")
+                if cwd:
+                    # Split on both separators rather than pathlib.Path(cwd).parts, which
+                    # parses using the *running* platform's rules - the watcher and the
+                    # session it watches are always the same machine/OS in practice, but this
+                    # avoids relying on that instead of just handling both explicitly.
+                    parts = [p for p in re.split(r"[/\\]+", cwd) if p]
+                    return "/".join(parts[-2:]) if len(parts) >= 2 else (parts[-1] if parts else None)
+    except OSError:
+        pass
+    return None
+
+
+def subagents_dir(jsonl_path):
+    # Subagent transcripts live under <project-dir>/<session-uuid>/subagents/ - a
+    # subdirectory named after the session (jsonl_path's own stem), sibling to the
+    # <uuid>.jsonl file itself, NOT directly in the project dir.
+    return jsonl_path.parent / jsonl_path.stem / "subagents"
 
 # --- session resolution -----------------------------------------------------
 
@@ -204,6 +239,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+
+        m2 = re.match(r"^/agent/([0-9a-f]{17})(/.*)?$", sub)
+        if m2:
+            return self._dispatch_agent(m2.group(1), m2.group(2), qs)
+
         if sub == "/":
             return self._handle_page()
         if sub == "/initial":
@@ -212,6 +252,43 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_history(qs)
         if sub == "/events":
             return self._handle_events(qs)
+        if sub == "/agents":
+            return self._handle_agents()
+        self.send_error(404)
+
+    def _dispatch_agent(self, agent_id, agent_sub, qs):
+        # AGENT_ID_RE already constrained agent_id via the do_GET regex above; re-check
+        # here too since this method could in principle be called from elsewhere later.
+        # Because the id can never contain "/" or ".." once it matches [0-9a-f]{17}, the
+        # f-string below can never escape the subagents/ directory - no further sanitizing
+        # is needed, but the resolved-prefix check is kept anyway as defense-in-depth.
+        if not AGENT_ID_RE.match(agent_id):
+            return self.send_error(404)
+        subdir = subagents_dir(self.server.jsonl_path)
+        candidate = subdir / f"agent-{agent_id}.jsonl"
+        try:
+            resolved = candidate.resolve()
+            if not str(resolved).startswith(str(subdir.resolve()) + os.sep):
+                return self.send_error(404)
+        except OSError:
+            return self.send_error(404)
+        if not candidate.is_file():
+            return self.send_error(404)
+
+        if agent_sub is None:
+            self.send_response(301)
+            self.send_header("Location", f"/t/{self.server.token}/agent/{agent_id}/")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if agent_sub == "/":
+            return self._handle_page(jsonl_path=candidate, agent_id=agent_id)
+        if agent_sub == "/initial":
+            return self._handle_initial(qs, jsonl_path=candidate)
+        if agent_sub == "/history":
+            return self._handle_history(qs, jsonl_path=candidate)
+        if agent_sub == "/events":
+            return self._handle_events(qs, jsonl_path=candidate)
         self.send_error(404)
 
     def do_POST(self):
@@ -224,11 +301,16 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(200, {"ok": True})
         threading.Thread(target=self.server.request_shutdown, daemon=True).start()
 
-    def _handle_page(self):
+    def _handle_page(self, jsonl_path=None, agent_id=None):
         html = TEMPLATE_PATH.read_text(encoding="utf-8")
         html = html.replace("__PRICING_DATA__", self.server.pricing_json)
-        html = html.replace("__SESSION_ID__", self.server.session_id)
-        html = html.replace("__SESSION_PATH__", str(self.server.jsonl_path))
+        session_label = self.server.session_id
+        if agent_id:
+            session_label = f"{session_label} · subagent {agent_id[:8]}"
+        html = html.replace("__SESSION_ID__", session_label)
+        html = html.replace("__SESSION_PATH__", str(jsonl_path or self.server.jsonl_path))
+        html = html.replace("__IS_SUBAGENT__", "true" if agent_id else "false")
+        html = html.replace("__PROJECT_FOLDER__", self.server.project_folder)
         body = html.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -238,9 +320,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _handle_initial(self, qs):
+    def _handle_initial(self, qs, jsonl_path=None):
         tail_bytes = int(qs.get("tail", ["200000"])[0])
-        path = self.server.jsonl_path
+        path = jsonl_path or self.server.jsonl_path
         approx_size = os.path.getsize(path)
         start = max(0, approx_size - tail_bytes)
         with open(path, "rb") as f:
@@ -268,13 +350,13 @@ class Handler(BaseHTTPRequestHandler):
         text = data.decode("utf-8", errors="replace")
         self._send_json(200, {"text": text, "size": size, "truncated": truncated, "start": start})
 
-    def _handle_history(self, qs):
+    def _handle_history(self, qs, jsonl_path=None):
         before = int(qs.get("before", ["0"])[0])
-        with open(self.server.jsonl_path, "rb") as f:
+        with open(jsonl_path or self.server.jsonl_path, "rb") as f:
             data = f.read(before)
         self._send_json(200, {"text": data.decode("utf-8", errors="replace")})
 
-    def _handle_events(self, qs):
+    def _handle_events(self, qs, jsonl_path=None):
         since = int(qs.get("since", ["0"])[0])
         try:
             self.send_response(200)
@@ -291,7 +373,7 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
 
             last_heartbeat = time.time()
-            path = self.server.jsonl_path
+            path = jsonl_path or self.server.jsonl_path
             while not self.server.shutting_down:
                 try:
                     size = os.path.getsize(path)
@@ -334,6 +416,39 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
             return
 
+    def _handle_agents(self):
+        subdir = subagents_dir(self.server.jsonl_path)
+        agents = []
+        if subdir.is_dir():
+            for meta_path in sorted(subdir.glob("agent-*.meta.json")):
+                # meta_path.stem strips only the trailing ".json", leaving "agent-<id>.meta" -
+                # strip both the "agent-" prefix and ".meta" suffix explicitly.
+                stem = meta_path.stem
+                if not stem.startswith("agent-") or not stem.endswith(".meta"):
+                    continue
+                agent_id = stem[len("agent-"):-len(".meta")]
+                if not AGENT_ID_RE.match(agent_id):
+                    continue
+                try:
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                except Exception:
+                    continue  # mid-write - will show up on a later poll
+                # v1 scope: only direct (depth 1) subagents of the main session. A subagent
+                # spawning its own subagent isn't surfaced yet (see README).
+                if meta.get("spawnDepth") != 1:
+                    continue
+                jsonl_path = subdir / f"agent-{agent_id}.jsonl"
+                agents.append({
+                    "id": agent_id,
+                    "agentType": meta.get("agentType"),
+                    "description": meta.get("description"),
+                    "toolUseId": meta.get("toolUseId"),
+                    "spawnDepth": meta.get("spawnDepth"),
+                    "model": meta.get("model"),
+                    "hasTranscript": jsonl_path.is_file(),
+                })
+        self._send_json(200, {"agents": agents})
+
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
@@ -372,6 +487,7 @@ def main():
     server = Server(("127.0.0.1", args.port), Handler)
     server.session_id = session_id
     server.jsonl_path = jsonl_path
+    server.project_folder = read_project_folder(jsonl_path) or session_id[:8]
     server.token = token
     server.pricing_json = json.dumps(pricing)
     server.shutting_down = False

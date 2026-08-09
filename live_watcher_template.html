@@ -3,7 +3,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Live: __SESSION_ID__</title>
+<title>__PROJECT_FOLDER__ — Live: __SESSION_ID__</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>%F0%9F%93%8A</text></svg>">
 <style>
   :root {
     --bg: #0b0d10; --panel: #12151a; --border: #22262d; --text: #e6e8eb;
@@ -71,6 +72,11 @@
     text-transform: uppercase; letter-spacing: .03em; padding-bottom: 4px; margin-bottom: 6px;
     border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); z-index: 2;
   }
+  .clear-divider {
+    text-align: center; font-size: 11px; color: var(--muted); margin: 10px 0;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .clear-divider::before, .clear-divider::after { content: ''; flex: 1; border-top: 1px dashed var(--border); }
   .turn-body { display: none; }
   .turn.expanded .turn-body { display: block; }
   .turn.expanded .turn-preview { display: none; }
@@ -100,6 +106,13 @@
   .tool-body .tool-input { color: var(--muted); margin-bottom: 8px; }
   .tool-body .tool-result-error { color: #f0648b; }
   .tool-pending { color: var(--muted); font-style: italic; }
+  .agent-panel {
+    margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  .agent-open-link { color: var(--accent); text-decoration: none; }
+  .agent-open-link:hover { text-decoration: underline; }
+  .agent-stats { color: var(--muted); }
   .attach-note { color: var(--muted); font-style: italic; font-size: 12px; }
   .turn-chart-panel { flex: 0 0 auto; margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
   .turn-chart-panel svg { display: block; width: 100%; cursor: pointer; user-select: none; }
@@ -126,6 +139,10 @@
   <div class="tile"><div class="label">Cost</div><div class="value" id="totalCost">$0.00</div></div>
   <div class="tile"><div class="label">Tokens</div><div class="value" id="totalTokens">0</div></div>
   <div class="tile"><div class="label">Cold-cache turns</div><div class="value" id="coldCount">0</div></div>
+  <div class="tile"><div class="label">Model</div><div class="value" id="currentModelTile" style="font-size:16px;">—</div></div>
+  <label class="toggle" id="sinceClearWrap" style="display:none; align-self:center;">
+    <input type="checkbox" id="sinceClearToggle"> Since last /clear
+  </label>
 </div>
 
 <div id="sessionDetail">
@@ -143,6 +160,7 @@
       <label class="toggle" id="hideColdCacheWrap" style="display:none">
         <input type="checkbox" id="hideColdCacheToggle"> Hide cold-cache spikes
       </label>
+      <span class="detail-meta" title="Subagent runs have no single turn position in this chart, so they're folded into the tiles above but not plotted here.">excludes subagent cost</span>
     </div>
     <svg id="turnChart" width="900" height="70"></svg>
   </div>
@@ -150,6 +168,10 @@
 
 <script>
 const PRICING = __PRICING_DATA__;
+// True when this page is itself a subagent's own tab (served from /agent/<id>/...) - such a
+// page has no /agents route of its own (v1 doesn't surface subagents-of-subagents), so it must
+// not poll for one.
+const IS_SUBAGENT = __IS_SUBAGENT__;
 
 function fmtUSD(v) {
   // per-turn costs are frequently sub-cent; 2 decimals alone would round them to $0.
@@ -214,7 +236,11 @@ function parseSessionJsonl(rawText, toolSteps) {
     if (d.type === 'user') {
       const content = d.message && d.message.content;
       if (typeof content === 'string') {
-        if (content.trim()) turns.push({ role: 'user', ts: d.timestamp, blocks: [{ kind: 'text', text: content }] });
+        if (content.includes('<command-name>clear</command-name>')) {
+          turns.push({ role: 'clear-marker', ts: d.timestamp });
+        } else if (content.trim()) {
+          turns.push({ role: 'user', ts: d.timestamp, blocks: [{ kind: 'text', text: content }] });
+        }
       } else if (Array.isArray(content)) {
         const hasToolResult = content.some(b => b.type === 'tool_result');
         if (hasToolResult) {
@@ -244,12 +270,12 @@ function parseSessionJsonl(rawText, toolSteps) {
         if (b.type === 'text' && b.text) blocks.push({ kind: 'text', text: b.text });
         else if (b.type === 'thinking' && b.thinking) blocks.push({ kind: 'thinking', text: b.thinking });
         else if (b.type === 'tool_use') {
-          const step = { id: b.id, name: b.name, input: b.input, result: null };
+          const step = { id: b.id, name: b.name, input: b.input, result: null, spawnTs: d.timestamp };
           toolSteps.set(b.id, step);
           blocks.push({ kind: 'tool', step });
         }
       });
-      if (blocks.length) turns.push({ role: 'assistant', ts: d.timestamp, model: msg.model, usage: msg.usage, blocks });
+      if (blocks.length) turns.push({ role: 'assistant', ts: d.timestamp, model: msg.model, usage: msg.usage, effort: d.effort, blocks });
     }
   }
   return turns;
@@ -257,6 +283,11 @@ function parseSessionJsonl(rawText, toolSteps) {
 
 function summarizeToolInput(input) {
   if (!input) return '';
+  // Agent/Task tool calls carry both a short human `description` and a much longer `prompt` -
+  // prefer the description (it's what "prompt" would match below, since it's checked first).
+  if (typeof input.subagent_type === 'string' && typeof input.description === 'string') {
+    return input.description.length > 80 ? input.description.slice(0, 80) + '…' : input.description;
+  }
   for (const key of ['file_path', 'pattern', 'query', 'url']) {
     if (typeof input[key] === 'string') return input[key];
   }
@@ -269,10 +300,28 @@ function summarizeToolInput(input) {
 // paints (or repaints) a step's summary/result text from its current .result - split out
 // of renderToolStep so onToolResult (above) can call it again later, once, when a result
 // that wasn't available at initial render time finally arrives.
+// Model ids are long ("claude-haiku-4-5-20251001") - trim the "claude-" prefix and a trailing
+// release-date suffix so the at-a-glance badge stays short ("haiku-4-5").
+function shortModelName(model) {
+  return model.replace(/^claude-/, '').replace(/-\d{8}$/, '');
+}
+
 function paintToolStep(step) {
   if (!step._summaryEl || !step._resultEl) return;
   const inputSummary = summarizeToolInput(step.input);
-  step._summaryEl.textContent = `🔧 ${step.name}${inputSummary ? ' — ' + inputSummary : ''}` +
+  let label = `🔧 ${step.name}`;
+  if (isAgentSpawnStep(step)) {
+    // subagent_type/model/effort at a glance, without needing to unfold the step: subagent_type
+    // is known immediately (it's in the tool_use input itself); model/effort are only known once
+    // refreshAgentStats has read the subagent's own transcript at least once, so they may not be
+    // present yet on first paint - this function gets called again once they resolve.
+    const badges = [];
+    if (step.input && step.input.subagent_type) badges.push(step.input.subagent_type);
+    if (step._agentModel) badges.push(shortModelName(step._agentModel));
+    if (step._agentEffort) badges.push('effort:' + step._agentEffort);
+    if (badges.length) label += ` [${badges.join(' · ')}]`;
+  }
+  step._summaryEl.textContent = `${label}${inputSummary ? ' — ' + inputSummary : ''}` +
     (step.result && step.result.isError ? ' (error)' : '');
   if (step.result) {
     step._resultEl.className = step.result.isError ? 'tool-result-error' : '';
@@ -301,6 +350,7 @@ function renderToolStep(step) {
 
   step._summaryEl = summary;
   step._resultEl = resultDiv;
+  step._bodyEl = body; // lets a later-discovered subagent panel attach after the fact
   paintToolStep(step);
   return details;
 }
@@ -329,12 +379,22 @@ function makeTranscriptHeaderRow() {
   return row;
 }
 
-let turnUsagePoints = []; // per assistant-turn {div, head, inTok, outTok, cacheTok, cost, coldCache}
+let turnUsagePoints = []; // per assistant-turn {div, head, inTok, outTok, cacheTok, cost, coldCache, ts}
+let clearMarkerTimestamps = []; // one per /clear seen in the transcript so far, any order
 
 // builds one turn's DOM and (for assistant turns) pushes its usage point; does not
 // attach the element anywhere, so callers can append (live tail) or insert-before (load
 // earlier history) without duplicating this ~90-line block.
 function buildTurnEl(turn) {
+  if (turn.role === 'clear-marker') {
+    clearMarkerTimestamps.push(turn.ts);
+    document.getElementById('sinceClearWrap').style.display = 'inline-flex';
+    const div = document.createElement('div');
+    div.className = 'clear-divider';
+    div.textContent = '🧹 /clear';
+    if (turn.ts) div.title = new Date(turn.ts).toLocaleString();
+    return div;
+  }
   const div = document.createElement('div');
   div.className = 'turn turn-' + turn.role; // folded by default: no 'expanded' class
 
@@ -358,7 +418,7 @@ function buildTurnEl(turn) {
       coldCache = true;
       coldCacheTitle = `Cache mostly missed this turn: ${fmtTok(costInfo.writeTokens)} tokens had to be rewritten vs only ${fmtTok(costInfo.readTokens)} read from cache - likely returned to this session after the cache window expired.`;
     }
-    turnUsagePoints.push({ div, head, inTok, outTok, cacheTok, cost: cost || 0, coldCache });
+    turnUsagePoints.push({ div, head, inTok, outTok, cacheTok, cost: cost || 0, coldCache, ts: turn.ts });
   }
   const numCell = (text, opts) => {
     const c = document.createElement('span');
@@ -471,7 +531,8 @@ function renderTurnChart() {
   hideColdCacheWrap.style.display = metric === 'cost' ? 'inline-flex' : 'none';
   const hidingColdCache = metric === 'cost' && document.getElementById('hideColdCacheToggle').checked;
 
-  const n = turnUsagePoints.length;
+  const points = visibleUsagePoints();
+  const n = points.length;
   if (n === 0) return;
   const W = svg.clientWidth || 900;
   svg.setAttribute('width', W);
@@ -480,7 +541,7 @@ function renderTurnChart() {
   const barW = Math.max(1, step - 1);
 
   let maxVal = 0;
-  turnUsagePoints.forEach(p => {
+  points.forEach(p => {
     if (hidingColdCache && p.coldCache) return;
     const v = conf.get(p);
     if (v > maxVal) maxVal = v;
@@ -495,7 +556,7 @@ function renderTurnChart() {
     svg.appendChild(r);
   };
 
-  turnUsagePoints.forEach((p, i) => {
+  points.forEach((p, i) => {
     if (hidingColdCache && p.coldCache) return;
     const x = i * step;
     const v = conf.get(p);
@@ -556,6 +617,7 @@ window.addEventListener('mouseup', () => { chartDragging = false; });
 
 document.getElementById('turnChartMetric').addEventListener('change', () => { renderTurnChart(); queueMaxHighlightUpdate(); });
 document.getElementById('hideColdCacheToggle').addEventListener('change', () => { renderTurnChart(); queueMaxHighlightUpdate(); });
+document.getElementById('sinceClearToggle').addEventListener('change', () => { updateTotals(); renderTurnChart(); queueMaxHighlightUpdate(); });
 window.addEventListener('resize', () => { if (turnUsagePoints.length) { renderTurnChart(); queueMaxHighlightUpdate(); } });
 
 let currentMaxHead = null;
@@ -616,6 +678,13 @@ let eventSource = null;
 let reconnectTimer = null;
 let userScrolledUp = false;
 const unknownModels = new Set();
+// Subagent (Task/Agent-tool) support: knownAgents is what /agents last reported (agent-id ->
+// its meta), agentAccumulators is each agent's latest parsed cost/token total (agent-id ->
+// {cost, inTok, outTok, cacheTok, ts}), folded into updateTotals() alongside the main session's
+// own turnUsagePoints. Both are keyed by agent-id, not by step, so a poll tick that runs before
+// or after a given tool_use step has rendered still converges to the same state either way.
+let knownAgents = new Map();
+let agentAccumulators = new Map();
 // Bumped by loadInitial (page load and every `reset` from a detected truncation/rotation).
 // loadFullHistory captures this before its await and checks it after - if a reset landed
 // mid-fetch, the transcript it was about to prepend into no longer exists (loadInitial
@@ -624,7 +693,12 @@ const unknownModels = new Set();
 let generation = 0;
 
 const transcriptEl = document.getElementById('transcript');
-onToolResult = paintToolStep;
+onToolResult = (step) => {
+  paintToolStep(step);
+  // The spawning tool_use just resolved, i.e. the subagent is done - get one last, accurate
+  // reading now rather than waiting up to 3s for the next poll tick.
+  if (step._agentMeta) refreshAgentStats(step);
+};
 
 function isAtBottom() {
   return transcriptEl.scrollHeight - transcriptEl.scrollTop - transcriptEl.clientHeight < 40;
@@ -636,24 +710,139 @@ transcriptEl.addEventListener('scroll', () => {
   userScrolledUp = !isAtBottom();
 });
 
+let currentModelTs = null; // chronological guard for the Model tile, see trackModel below
+
 function trackModel(turn) {
   if (turn.role !== 'assistant' || !turn.model) return;
-  if (PRICING[turn.model] || unknownModels.has(turn.model)) return;
-  unknownModels.add(turn.model);
-  const w = document.getElementById('unknownWarn');
-  w.style.display = 'block';
-  w.textContent = 'Unpriced model(s), cost shown as $0 for: ' + Array.from(unknownModels).join(', ');
+  if (!PRICING[turn.model] && !unknownModels.has(turn.model)) {
+    unknownModels.add(turn.model);
+    const w = document.getElementById('unknownWarn');
+    w.style.display = 'block';
+    w.textContent = 'Unpriced model(s), cost shown as $0 for: ' + Array.from(unknownModels).join(', ');
+  }
+  // Keep the Model tile showing whichever turn is chronologically latest, regardless of load
+  // order - loadFullHistory prepends OLDER turns that can arrive after the live tail is
+  // already ahead, and those must not clobber a newer model back to a stale one.
+  if (!currentModelTs || (turn.ts && turn.ts > currentModelTs)) {
+    currentModelTs = turn.ts;
+    document.getElementById('currentModelTile').textContent =
+      shortModelName(turn.model) + (turn.effort ? ' · ' + turn.effort : '');
+  }
+}
+
+// ISO 8601 timestamps sort correctly as plain strings, so the max is just the latest /clear.
+// Shared by the summary tiles and the mini chart so "Since last /clear" scopes both the same way.
+function clearCutoff() {
+  const sinceClear = document.getElementById('sinceClearToggle').checked;
+  if (!sinceClear || !clearMarkerTimestamps.length) return null;
+  return clearMarkerTimestamps.reduce((a, b) => (b > a ? b : a));
+}
+
+function visibleUsagePoints() {
+  const cutoff = clearCutoff();
+  return cutoff ? turnUsagePoints.filter(p => p.ts && p.ts > cutoff) : turnUsagePoints;
+}
+
+// Same cutoff, applied to subagent totals via the ts of the turn that spawned each one.
+function visibleAgentAccumulators() {
+  const cutoff = clearCutoff();
+  const all = Array.from(agentAccumulators.values());
+  return cutoff ? all.filter(a => a.ts && a.ts > cutoff) : all;
 }
 
 function updateTotals() {
   let cost = 0, inTok = 0, outTok = 0, cacheTok = 0, cold = 0;
-  turnUsagePoints.forEach(p => {
+  visibleUsagePoints().forEach(p => {
     cost += p.cost; inTok += p.inTok; outTok += p.outTok; cacheTok += p.cacheTok;
     if (p.coldCache) cold++;
+  });
+  // Subagent cost/tokens fold into the same tiles (real spend either way); cold-cache count
+  // stays main-session-only - a secondary metric, not worth the extra plumbing here.
+  visibleAgentAccumulators().forEach(a => {
+    cost += a.cost; inTok += a.inTok; outTok += a.outTok; cacheTok += a.cacheTok;
   });
   document.getElementById('totalCost').textContent = fmtUSD(cost);
   document.getElementById('totalTokens').textContent = fmtTok(inTok + outTok + cacheTok);
   document.getElementById('coldCount').textContent = String(cold);
+}
+
+// --- subagent (Task/Agent-tool) support -----------------------------------------------
+
+function isAgentSpawnStep(step) {
+  return step.name === 'Agent' || step.name === 'Task';
+}
+
+async function pollAgents() {
+  try {
+    const res = await fetch('agents');
+    if (!res.ok) return;
+    const data = await res.json();
+    data.agents.forEach(a => {
+      knownAgents.set(a.id, a);
+      attachAgentToStep(a);
+    });
+  } catch { /* next tick will retry */ }
+}
+
+function attachAgentToStep(agentMeta) {
+  const step = toolSteps.get(agentMeta.toolUseId);
+  if (!step || !isAgentSpawnStep(step) || step._agentAttached) return;
+  step._agentAttached = true;
+  renderAgentPanel(step, agentMeta);
+}
+
+function renderAgentPanel(step, agentMeta) {
+  if (!step._bodyEl) return;
+  const panel = document.createElement('div');
+  panel.className = 'agent-panel';
+  const link = document.createElement('a');
+  link.className = 'agent-open-link';
+  link.textContent = '↗ open in new tab';
+  link.href = 'agent/' + agentMeta.id + '/';
+  link.target = '_blank';
+  link.rel = 'noopener';
+  panel.appendChild(link);
+  const stats = document.createElement('span');
+  stats.className = 'agent-stats';
+  stats.textContent = ' — loading…';
+  panel.appendChild(stats);
+  step._bodyEl.appendChild(panel);
+  step._agentStatsEl = stats;
+  step._agentMeta = agentMeta;
+  refreshAgentStats(step);
+}
+
+async function refreshAgentStats(step) {
+  const id = step._agentMeta.id;
+  try {
+    const res = await fetch('agent/' + id + '/initial?tail=200000');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    // Reuses the exact same parser/pricing math as the main transcript - a subagent's .jsonl
+    // lines are the same schema family, so no bespoke parsing is needed here.
+    const localSteps = new Map();
+    const turns = parseSessionJsonl(data.text, localSteps);
+    let cost = 0, inTok = 0, outTok = 0, cacheTok = 0;
+    turns.forEach(t => {
+      if (t.role !== 'assistant' || !t.usage || !t.model) return;
+      inTok += t.usage.input_tokens || 0;
+      outTok += t.usage.output_tokens || 0;
+      const ci = stepCost(t.model, t.usage);
+      if (ci) { cost += ci.cost; cacheTok += ci.cacheTokens; }
+      // Model/effort actually used - only knowable from the subagent's own transcript, not
+      // from the .meta.json sidecar (which only carries a model override, when one was set).
+      if (!step._agentModel) step._agentModel = t.model;
+      if (!step._agentEffort && t.effort) step._agentEffort = t.effort;
+    });
+    agentAccumulators.set(id, { cost, inTok, outTok, cacheTok, ts: step.spawnTs });
+    step._agentStatsEl.textContent = ' — ' + fmtUSD(cost) + ', ' + fmtTok(inTok + outTok + cacheTok) + ' tok' +
+      (step.result ? '' : ' (running…)');
+    paintToolStep(step); // refresh the collapsed summary line now that model/effort may be known
+    updateTotals();
+  } catch {
+    step._agentStatsEl.textContent = ' — (unavailable)';
+  }
+  if (!step.result) setTimeout(() => refreshAgentStats(step), 3000);
 }
 
 function setStatus(text) {
@@ -729,6 +918,10 @@ async function loadInitial() {
   transcriptEl.appendChild(makeTranscriptHeaderRow());
   turnUsagePoints = [];
   toolSteps = new Map();
+  // A main-file truncation/rotation invalidates the step objects any agent panels were
+  // attached to - drop this state too; the next pollAgents() tick re-attaches within 3s.
+  knownAgents = new Map();
+  agentAccumulators = new Map();
   currentMaxHead = null;
   setStatus('Loading...');
 
@@ -763,6 +956,10 @@ async function loadInitial() {
 }
 
 loadInitial();
+// Runs for the page's lifetime, independent of loadInitial()/reset cycles - it's idempotent
+// (a lookup miss against a not-yet-(re)built toolSteps is just a no-op until the next tick).
+// Skipped on a subagent's own tab, which has no /agents route of its own.
+if (!IS_SUBAGENT) setInterval(pollAgents, 3000);
 </script>
 </body>
 </html>

@@ -25,13 +25,15 @@ session ends.
 **Inherent limitation, not a bug**: a JSONL turn only exists once it's fully written, so this can
 never show more than "one turn behind" the CLI.
 
-**Cost/token totals exclude subagent runs**: when the CLI spawns a subagent (the Task/Agent
-tool - e.g. an Explore or Plan-review agent), that subagent's transcript is written to a separate
-file under `<session-id>/subagents/`, not into the main session's own `.jsonl`. This tool only
-tails the main session file, so a subagent's tokens and cost never show up in the totals here,
-even after "Load full history" - they're not truncated out, they were never read in the first
-place. The CLI's own `/cost` command includes them; this tool's totals will read lower for any
-session that used subagents, sometimes substantially (e.g. Opus-model review agents).
+**Subagent runs are included, with two v1 caveats**: when the CLI spawns a subagent (the
+Task/Agent tool - e.g. an Explore or Plan-review agent), its transcript is written to a separate
+file under `<session-id>/subagents/`, discovered by polling (not pushed via SSE, unlike the main
+session), so a nested summary and the top-line totals can lag the CLI's own numbers by a few
+seconds on top of the "one turn behind" caveat above. It renders nested inside the spawning
+`Agent`/`Task` tool call, with a link to open that subagent's own live transcript in a new tab.
+Only direct (depth-1) subagents are shown - a subagent spawning its own subagent isn't surfaced
+yet. The per-turn mini chart stays main-session-only (a subagent run has no single turn position
+in that timeline); its cost is folded into the tiles above the chart, not into the bars.
 
 **Vibe-coded**: this was built almost entirely by Claude Code itself, with human review and a
 couple of adversarial LLM review passes rather than exhaustive manual auditing. It's a personal
