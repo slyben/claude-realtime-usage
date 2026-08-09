@@ -18,6 +18,22 @@ couple of adversarial LLM review passes rather than exhaustive manual auditing. 
 tool, not a security-hardened product - use at your own risk, and read the code before trusting
 it with anything you care about.
 
+## Getting started
+
+```
+git clone https://github.com/slyben/claude-realtime-usage.git
+cd claude-realtime-usage
+```
+
+Then open a Claude Code session with this folder as the project. Skills are project-local, so
+`/watch-live` is picked up automatically the next time Claude Code starts here - no separate
+install step. Just say:
+
+> Watch this session live.
+
+(or type `/watch-live` directly) and Claude will start the server and open the transcript in a
+browser tab.
+
 ## Demo
 
 ![Demo](earlydemo.gif)
