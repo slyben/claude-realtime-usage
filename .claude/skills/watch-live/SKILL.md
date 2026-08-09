@@ -1,13 +1,17 @@
 ---
 name: watch-live
-description: Start or stop a live browser-tab watcher for this Claude Code session's transcript (cost/tokens/cold-cache updating ~1 turn behind the CLI). Use when the user asks to watch this session live, invokes /watch-live, or asks to stop the live watcher.
+description: Start or stop a live watcher for this Claude Code session's transcript (cost/tokens/cold-cache updating ~1 turn behind the CLI). Use when the user asks to watch this session live, invokes /watch-live, or asks to stop the live watcher.
 ---
 
 # Live session watcher
 
 Starts `live_watcher.py` (a small local server in this repo) as a background process tailing
-*this exact session's* JSONL file, and opens the result in a Playwright-controlled browser tab.
-The steps below assume this repo (wherever it's checked out) is the current project.
+*this exact session's* JSONL file, and gives you a URL to open in your own browser. The steps
+below assume this repo (wherever it's checked out) is the current project.
+
+Default mode just prints the URL - open it yourself in whatever browser you normally use, no
+extra dependency needed. `/watch-live auto` instead opens it for you in a Playwright-controlled
+tab, if the Playwright MCP plugin is connected.
 
 `live_watcher.py` itself is cross-platform (stdlib only). Only this skill's own shell commands
 differ slightly by OS - see Platform below.
@@ -28,7 +32,9 @@ Set `$PY` to the right command for the commands below.
 
 ## Steps
 
-Arguments: bare `/watch-live` starts (or reattaches to) the watcher; `/watch-live stop` stops it.
+Arguments: bare `/watch-live` starts (or reattaches to) the watcher and just prints the URL;
+`/watch-live auto` does the same but also opens it in a Playwright-controlled tab;
+`/watch-live stop` stops it.
 
 ### 1. Get this session's own UUID and the lockfile path
 
@@ -60,10 +66,10 @@ if [ -f "$LOCK" ]; then
 fi
 ```
 
-If that printed `ALIVE:<url>`, skip straight to step 4 with that URL (for `/watch-live`) or step
-5 (for `/watch-live stop`) - don't start a second server.
+If that printed `ALIVE:<url>`, skip straight to step 4 with that URL (for `/watch-live` or
+`/watch-live auto`) or step 5 (for `/watch-live stop`) - don't start a second server.
 
-### 3. Start (bare `/watch-live`, no existing watcher found)
+### 3. Start (`/watch-live` or `/watch-live auto`, no existing watcher found)
 
 ```
 cd <this repo's root - the directory containing this .claude/skills/watch-live/ folder>
@@ -83,11 +89,17 @@ Read `url` from the printed JSON. If the lockfile never appeared, check the back
 captured output (`BashOutput`) for the reason - most likely a port bind failure or the session
 file not existing yet - and report it to the user instead of hanging silently.
 
-### 4. Open the browser tab (`/watch-live`, URL resolved via step 2 or 3)
+### 4. Report the URL (`/watch-live` or `/watch-live auto`, resolved via step 2 or 3)
 
-Call the Playwright MCP `browser_navigate` tool with the resolved URL. Report the URL back to the
-user in chat either way, in case they want to reopen it manually later - it stays valid as long
-as the watcher process is running.
+Always report the URL back to the user in chat - it stays valid as long as the watcher process is
+running, so they can (re)open it manually at any time regardless of which mode was used.
+
+- Bare `/watch-live`: that's it, stop here. Don't open anything yourself - the user opens the URL
+  in their own browser.
+- `/watch-live auto`: additionally open it yourself, in a Playwright-controlled tab. If the
+  Playwright MCP tools (`mcp__playwright__browser_navigate` or equivalent) aren't available -
+  deferred-but-unloadable, or the plugin isn't connected at all - say so plainly and fall back to
+  the bare-mode behavior (URL only) rather than failing the whole command.
 
 ### 5. Stop (`/watch-live stop`)
 
