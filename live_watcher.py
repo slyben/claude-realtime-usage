@@ -31,7 +31,7 @@ from pathlib import Path
 
 TOOL_DIR = Path(__file__).resolve().parent
 TEMPLATE_PATH = TOOL_DIR / "live_watcher_template.html"
-PRICING_PATH = TOOL_DIR / "pricing.json"
+PRICING_PATH = TOOL_DIR / "usage" / "pricing.json"
 LOCK_DIR = Path(tempfile.gettempdir()) / "live_watcher"
 
 # Bundled all-sessions/all-time usage dashboard tool (its own README/skill live under here too).

@@ -10,11 +10,11 @@ Works for local session logs under `~/.claude/projects/` - the CLI, and likely t
 (VS Code/JetBrains), since they drive the same local session format. It will **not** work for the
 web app (claude.ai/code): that's cloud-hosted, with no local `.jsonl` file for this tool to tail.
 
-Standalone, no external dependencies beyond the Python standard library. `pricing.json` holds
-per-model USD/MTok rates; keep it in sync with
-[Anthropic's pricing page](https://www.anthropic.com/pricing), especially around pricing changes
-(e.g. the sonnet-5 intro price reverting 2026-09-01) - if a model is missing here the live view
-shows a persistent "unpriced model" banner rather than a silently wrong number.
+Standalone, no external dependencies beyond the Python standard library. `usage/pricing.json`
+holds per-model USD/MTok rates (shared with the bundled `usage/` tool, see below); keep it in
+sync with [Anthropic's pricing page](https://www.anthropic.com/pricing) - if a model is missing
+here the live view shows a persistent "unpriced model" banner rather than a silently wrong
+number.
 
 **Local only**: it reads the session's `.jsonl` file already sitting on disk - no calls to
 Anthropic or anywhere else, no network access beyond serving `127.0.0.1` to your own browser. And
@@ -156,10 +156,12 @@ into your existing `hooks.SessionStart` array rather than replacing it.
 
 - `live_watcher.py` - stdlib-only Python server (no dependencies to install).
 - `live_watcher_template.html` - the browser-side transcript/chart renderer.
-- `pricing.json` - per-model USD/MTok rates, own copy (see note above).
 - `.claude/skills/watch-live/` - the `/watch-live` skill.
 - `usage/` - the bundled all-sessions/all-time dashboard tool behind the "All-time usage" button
-  (own README, own `pricing.json`, own `/claude-usage` skill - see [usage/README.md](usage/README.md)).
+  (own README, own `/claude-usage` skill - see [usage/README.md](usage/README.md)). Its
+  `usage/pricing.json` is the single source of truth for per-model rates; `live_watcher.py` reads
+  it too, so this repo's copy of `usage/` is no longer independently zip-and-copy portable (see
+  usage/README.md's installation notes).
 
 Both the server and the `/watch-live` skill are cross-platform (macOS/Linux/Windows) - the skill
 branches its Python invocation (`python3` vs `python`) and stop fallback (`kill` vs `taskkill`) by
